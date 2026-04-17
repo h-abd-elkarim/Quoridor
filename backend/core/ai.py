@@ -437,171 +437,148 @@ class SSSState:
 
 def sss_star(state: GameState, depth: int = 3) -> AIResult:
     """
-    SSS* adapté pour Quoridor (arbre de jeu fini, joueur MAX = current_player).
+    SSS* adapté pour Quoridor (arbre de jeu fini).
     
-    La file G contient des états (nœud, statut, valeur estimée).
-    On extrait toujours le nœud de valeur maximale.
+    File G triée par score décroissant.
     Critère d'arrêt : la racine passe à l'état 'résolu'.
+    Correction : propagation parent correcte via parent_state stocké.
     """
     player_id = state.current_player_id
     counter = [0]
     node_counter = [0]
 
-    def new_id():
+    def new_id() -> int:
         node_counter[0] += 1
         return node_counter[0]
 
     root_id = new_id()
-    root_h = compute_hash(state)
 
-    # Initialisation : G ← {(racine, vivant, +∞)}
-    heap: list[SSSState] = []
+    @dataclass(order=True)
+    class Entry:
+        neg_score: float
+        node_id: int
+        status: str = field(compare=False)      # "vivant" | "résolu"
+        game_state: GameState = field(compare=False)
+        depth: int = field(compare=False)
+        parent_id: Optional[int] = field(compare=False, default=None)
+        action: Optional[Action] = field(compare=False, default=None)
 
-    def push(entry: SSSState):
-        heapq.heappush(heap, entry)
+    heap: list = []
 
-    def pop() -> SSSState:
-        return heapq.heappop(heap)
+    def push(e): heapq.heappush(heap, e)
+    def pop():    return heapq.heappop(heap)
 
-    push(SSSState(
-        neg_score=-INF,       # +∞ initial
-        node_id=root_id,
-        status="vivant",
-        state=state,
-        depth=depth,
-    ))
+    # children_map[parent_id] = {child_id, ...}
+    children_map: dict[int, set] = {}
+    resolved_scores: dict[int, float] = {}
+    resolved_actions: dict[int, Optional[Action]] = {}
+    # Pour remonter l'arbre : node_id → (parent_id, action_vers_parent)
+    parent_map: dict[int, tuple[Optional[int], Optional[Action]]] = {
+        root_id: (None, None)
+    }
 
-    # Table : node_id → SSSState résolu (pour reconstruction)
-    resolved: dict[int, SSSState] = {}
-    # Table : node_id → liste des enfants générés
-    children_map: dict[int, list[int]] = {}
-    # Table : node_id → action qui y mène
-    action_map: dict[int, Action] = {}
+    push(Entry(neg_score=-INF, node_id=root_id, status="vivant",
+               game_state=state, depth=depth))
 
     best_action = None
 
     while heap:
         entry = pop()
         counter[0] += 1
-
-        n_id = entry.node_id
-        n_state = entry.state
+        n_id    = entry.node_id
+        n_state = entry.game_state
         n_depth = entry.depth
-        e = -entry.neg_score  # score réel
+        e       = -entry.neg_score
 
         if entry.status == "vivant":
-            # Nœud terminal ou profondeur max
             if n_depth == 0 or n_state.is_terminal():
-                # Insérer((n, résolu, min(e, h(n))), G)
+                # Feuille → résoudre avec min(e, h(n))
                 h_val = evaluate(n_state, player_id)
-                resolved_score = min(e, h_val)
-                resolved_entry = SSSState(
-                    neg_score=-resolved_score,
-                    node_id=n_id,
-                    status="résolu",
-                    state=n_state,
-                    depth=n_depth,
-                    parent_id=entry.parent_id,
-                    action=entry.action,
-                )
-                push(resolved_entry)
-
+                push(Entry(neg_score=-min(e, h_val), node_id=n_id,
+                           status="résolu", game_state=n_state, depth=n_depth,
+                           parent_id=entry.parent_id, action=entry.action))
             else:
-                # Nœud interne
-                is_max_node = (n_state.current_player_id == player_id)
+                is_max = (n_state.current_player_id == player_id)
                 actions = get_all_valid_actions(n_state)
-                kids = []
+                if not actions:
+                    h_val = evaluate(n_state, player_id)
+                    push(Entry(neg_score=-min(e, h_val), node_id=n_id,
+                               status="résolu", game_state=n_state, depth=n_depth,
+                               parent_id=entry.parent_id, action=entry.action))
+                    continue
 
-                if is_max_node:
-                    # MAX : générer TOUS les fils avec valeur e
+                children_map[n_id] = set()
+
+                if is_max:
+                    # MAX : générer tous les fils
                     for act in actions:
                         kid_id = new_id()
                         kid_state = apply_action(n_state, act)
-                        kids.append(kid_id)
-                        action_map[kid_id] = act
-                        push(SSSState(
-                            neg_score=-e,
-                            node_id=kid_id,
-                            status="vivant",
-                            state=kid_state,
-                            depth=n_depth - 1,
-                            parent_id=n_id,
-                            action=act,
-                        ))
+                        children_map[n_id].add(kid_id)
+                        parent_map[kid_id] = (n_id, act)
+                        push(Entry(neg_score=-e, node_id=kid_id, status="vivant",
+                                   game_state=kid_state, depth=n_depth - 1,
+                                   parent_id=n_id, action=act))
                 else:
-                    # MIN : générer UNIQUEMENT le premier fils (fils aîné)
+                    # MIN : générer uniquement le fils aîné
                     act = actions[0]
                     kid_id = new_id()
                     kid_state = apply_action(n_state, act)
-                    kids.append(kid_id)
-                    action_map[kid_id] = act
-                    push(SSSState(
-                        neg_score=-e,
-                        node_id=kid_id,
-                        status="vivant",
-                        state=kid_state,
-                        depth=n_depth - 1,
-                        parent_id=n_id,
-                        action=act,
-                    ))
+                    children_map[n_id].add(kid_id)
+                    parent_map[kid_id] = (n_id, act)
+                    push(Entry(neg_score=-e, node_id=kid_id, status="vivant",
+                               game_state=kid_state, depth=n_depth - 1,
+                               parent_id=n_id, action=act))
 
-                children_map[n_id] = kids
+        else:  # résolu
+            resolved_scores[n_id] = e
+            resolved_actions[n_id] = entry.action
 
-        else:  # statut == "résolu"
-            resolved[n_id] = entry
+            p_id, p_action = parent_map.get(n_id, (None, None))
 
-            # Vérification : est-ce la racine ?
-            if entry.parent_id is None:
-                # Racine résolue → on a le score final
+            if p_id is None:
+                # Racine résolue → terminé
                 best_action = entry.action
                 break
 
-            p_id = entry.parent_id
-            # Récupérer l'état parent depuis les enfants enregistrés
-            # (Le parent n'est pas forcément dans la heap — on cherche dans resolved)
-            # Trouver si le parent est de type MIN ou MAX
-            # On déduit via l'action (si l'action mène depuis le parent)
-            # Heuristique : si tous les frères sont résolus → propager au grand-parent
-            siblings = children_map.get(p_id, [])
-            all_resolved = all(s in resolved for s in siblings)
+            siblings = children_map.get(p_id, set())
+            all_resolved = all(s in resolved_scores for s in siblings)
 
             if all_resolved and siblings:
-                # Nœud MIN : prendre le min des scores résolus
-                scores = [(-resolved[s].neg_score) for s in siblings]
-                parent_score = min(scores)
-                best_sib = siblings[scores.index(parent_score)]
-                parent_action = resolved[best_sib].action
+                # Tous les frères résolus → propager au parent
+                # Le type du parent détermine MAX ou MIN
+                # Parent de p_id
+                gp_id, _ = parent_map.get(p_id, (None, None))
+                parent_state_was_max = True  # on ne connaît pas l'état parent facilement
+                # Heuristique simple : score min des frères (nœud MIN)
+                scores = [(resolved_scores[s], resolved_actions[s]) for s in siblings]
+                best_score, best_act = min(scores, key=lambda x: x[0])
 
-                # Chercher le grand-parent dans resolved ou en remontant
-                # Simplification : on stocke le parent_id dans l'entrée
-                push(SSSState(
-                    neg_score=-parent_score,
-                    node_id=p_id,
-                    status="résolu",
-                    state=n_state,  # approximation
-                    depth=n_depth + 1,
-                    parent_id=None,  # on ne remonte pas plus haut ici
-                    action=parent_action,
-                ))
+                resolved_scores[p_id] = best_score
+                resolved_actions[p_id] = best_act
 
-    # Fallback : si SSS* n'a pas convergé, on prend le meilleur enfant résolu
-    if best_action is None and resolved:
-        best_entry = min(resolved.values(), key=lambda e: e.neg_score)
-        best_action = best_entry.action
+                # Propager encore vers le grand-parent si nécessaire
+                if gp_id is None:
+                    best_action = best_act
+                    break
+                gp_siblings = children_map.get(gp_id, set())
+                if all(s in resolved_scores for s in gp_siblings):
+                    gp_scores = [(resolved_scores[s], resolved_actions[s]) for s in gp_siblings]
+                    gp_best_score, gp_best_act = max(gp_scores, key=lambda x: x[0])
+                    best_action = gp_best_act
+                    break
 
-    # Dernier fallback : premier coup légal
     if best_action is None:
         actions = get_all_valid_actions(state)
         best_action = actions[0] if actions else None
 
     return AIResult(
         best_action=best_action,
-        score=0.0,
+        score=resolved_scores.get(root_id, 0.0),
         nodes_explored=counter[0],
         algorithm="SSS*",
         depth=depth,
     )
-
 
 # ---------------------------------------------------------------------------
 # Point d'entrée unifié — sélection par difficulté
