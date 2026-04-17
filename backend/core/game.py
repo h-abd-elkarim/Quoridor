@@ -92,3 +92,13 @@ class GameState:
                 for w in self.board.walls
             ],
         }
+
+    def get_all_valid_actions(self):
+        """Proxy vers rules.get_all_valid_actions — évite l'import circulaire."""
+        from .rules import get_all_valid_actions
+        return get_all_valid_actions(self)
+
+    def apply(self, action):
+        """Proxy vers rules.apply_action."""
+        from .rules import apply_action
+        return apply_action(self, action)
