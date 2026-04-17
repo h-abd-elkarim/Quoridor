@@ -83,12 +83,10 @@ def _reconstruct_path(
 
 def shortest_distance_to_goal(board: Board, start: Position, goal_row: int) -> int:
     """
-    Retourne la distance BFS minimale jusqu'à goal_row.
-    Utilisé comme heuristique h(n) dans A* et dans les fonctions d'évaluation
-    Minimax (plus la distance est courte, meilleur est le score).
-    Retourne float('inf') si aucun chemin n'existe.
+    Retourne la distance BFS minimale. Retourne float('inf') si bloqué.
+    Guard ajouté : path peut être None (cas théorique hors contrainte BFS).
     """
     path = bfs_shortest_path(board, start, goal_row)
     if path is None:
         return float('inf')
-    return len(path) - 1  # nombre de pas (pas de cases)
+    return len(path) - 1
