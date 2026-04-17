@@ -1,0 +1,44 @@
+# =========================
+# 1. PYTHON (Backend)
+# =========================
+# Environnements virtuels
+venv/
+env/
+.venv/
+
+# Fichiers de cache générés automatiquement
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# =========================
+# 2. NODE/REACT (Frontend)
+# =========================
+node_modules/
+build/
+dist/
+.npm/
+
+# =========================
+# 3. SÉCURITÉ & CONFIGS
+# =========================
+# Ne JAMAIS envoyer de mots de passe ou clés secrètes sur Git
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+
+# =========================
+# 4. FICHIERS SYSTÈME & IDE
+# =========================
+# Fichiers Mac/Windows
+.DS_Store
+Thumbs.db
+
+# Fichiers d'éditeurs de code (VS Code, PyCharm, etc.)
+.vscode/
+.idea/
+*.swp
