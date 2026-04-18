@@ -228,3 +228,17 @@ def _wall_to_notation(wall: Wall) -> str:
     base = _pos_to_notation(wall.position)
     suffix = "h" if wall.orientation == WallOrientation.HORIZONTAL else "v"
     return f"{base}{suffix}"
+
+def apply_action_trusted(state: GameState, action: Action) -> GameState:
+    """Version IA : pas de re-validation (précondition : action vient de get_all_valid_actions)."""
+    new_state = state.clone()
+    if isinstance(action, MoveAction):
+        new_state.current_player.position = action.destination
+        new_state.current_player.move_history.append(_pos_to_notation(action.destination))
+    elif isinstance(action, WallAction):
+        new_state.board.place_wall(action.wall)
+        new_state.current_player.walls_remaining -= 1
+        new_state.current_player.move_history.append(_wall_to_notation(action.wall))
+    new_state.check_victory()
+    new_state.switch_turn()
+    return new_state

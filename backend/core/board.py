@@ -58,9 +58,9 @@ class Wall:
         """Vérifie que la barrière tient dans le plateau (max index 7)."""
         r, c = self.position.row, self.position.col
         if self.orientation == WallOrientation.HORIZONTAL:
-            return 0 <= r < BOARD_SIZE - 1 and 0 <= c < BOARD_SIZE - 2
+            return 0 <= r < BOARD_SIZE - 1 and 0 <= c < BOARD_SIZE - 1
         else:
-            return 0 <= r < BOARD_SIZE - 2 and 0 <= c < BOARD_SIZE - 1
+            return 0 <= r < BOARD_SIZE - 1 and 0 <= c < BOARD_SIZE - 1
 
 
 @dataclass

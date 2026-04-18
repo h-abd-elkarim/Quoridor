@@ -16,7 +16,7 @@ import math
 
 from .game import GameState
 from .player import PlayerID
-from .rules import Action, get_all_valid_actions, apply_action
+from .rules import Action, get_all_valid_actions, apply_action,apply_action_trusted
 from .evaluation import evaluate, WIN_SCORE, LOSE_SCORE
 from .zobrist import compute_hash
 
@@ -270,11 +270,12 @@ def alphabeta(
                 best_action = actions[k]
             k += 1
         result = beta
-
+    original_alpha = alpha
+    original_beta = beta
     # Mise en table de transposition
     if result <= original_alpha:
         flag = "UPPER"
-    elif result >= beta:
+    elif result >= original_beta:
         flag = "LOWER"
     else:
         flag = "EXACT"
@@ -359,15 +360,22 @@ def negalphabeta(
     k = 0
 
     while alpha < beta and k < len(actions):              # Tant que (α < β et k ≤ bf)
-        child = apply_action(state, actions[k])
+        # UTILISATION DU FAST PATH POUR LA VITESSE
+        child = apply_action_trusted(state, actions[k])   
+        
         child_val = -negalphabeta(
             child, depth - 1, -beta, -alpha,              # Négαβ(fils[k], -β, -α)
             maximizing_player_id, counter, tt
         )
-        val = max(val, child_val)                         # val ← Max(val, ...)
-        if child_val > alpha:
-            alpha = max(alpha, val)                       # α ← Max(α, val)
+        
+        # CORRECTION : Mise à jour de la meilleure valeur et action
+        if child_val > val:
+            val = child_val
             best_action = actions[k]
+            
+        # CORRECTION : Alpha toujours mis à jour avec le max(alpha, val)
+        alpha = max(alpha, val)                           
+        
         k += 1
 
     # Table de transposition
@@ -380,7 +388,6 @@ def negalphabeta(
     tt.store(h, TTEntry(score=val, depth=depth, flag=flag, best_action=best_action))
 
     return val
-
 
 def negalphabeta_decision(
     state: GameState, depth: int = 4, tt: Optional[TranspositionTable] = None
@@ -441,7 +448,7 @@ def sss_star(state: GameState, depth: int = 3) -> AIResult:
     
     File G triée par score décroissant.
     Critère d'arrêt : la racine passe à l'état 'résolu'.
-    Correction : propagation parent correcte via parent_state stocké.
+    Correction : propagation parent correcte via is_max_map.
     """
     player_id = state.current_player_id
     counter = [0]
@@ -468,14 +475,16 @@ def sss_star(state: GameState, depth: int = 3) -> AIResult:
     def push(e): heapq.heappush(heap, e)
     def pop():    return heapq.heappop(heap)
 
-    # children_map[parent_id] = {child_id, ...}
     children_map: dict[int, set] = {}
     resolved_scores: dict[int, float] = {}
     resolved_actions: dict[int, Optional[Action]] = {}
-    # Pour remonter l'arbre : node_id → (parent_id, action_vers_parent)
+    
     parent_map: dict[int, tuple[Optional[int], Optional[Action]]] = {
         root_id: (None, None)
     }
+
+    # 1. INITIALISATION DU MAP AU BON ENDROIT
+    is_max_map: dict[int, bool] = {}
 
     push(Entry(neg_score=-INF, node_id=root_id, status="vivant",
                game_state=state, depth=depth))
@@ -492,13 +501,16 @@ def sss_star(state: GameState, depth: int = 3) -> AIResult:
 
         if entry.status == "vivant":
             if n_depth == 0 or n_state.is_terminal():
-                # Feuille → résoudre avec min(e, h(n))
                 h_val = evaluate(n_state, player_id)
                 push(Entry(neg_score=-min(e, h_val), node_id=n_id,
                            status="résolu", game_state=n_state, depth=n_depth,
                            parent_id=entry.parent_id, action=entry.action))
             else:
                 is_max = (n_state.current_player_id == player_id)
+                
+                # 2. ENREGISTREMENT À LA CRÉATION DU NOEUD
+                is_max_map[n_id] = is_max
+                
                 actions = get_all_valid_actions(n_state)
                 if not actions:
                     h_val = evaluate(n_state, player_id)
@@ -510,20 +522,20 @@ def sss_star(state: GameState, depth: int = 3) -> AIResult:
                 children_map[n_id] = set()
 
                 if is_max:
-                    # MAX : générer tous les fils
                     for act in actions:
                         kid_id = new_id()
-                        kid_state = apply_action(n_state, act)
+                        # UTILISATION DU CHEMIN RAPIDE
+                        kid_state = apply_action_trusted(n_state, act)
                         children_map[n_id].add(kid_id)
                         parent_map[kid_id] = (n_id, act)
                         push(Entry(neg_score=-e, node_id=kid_id, status="vivant",
                                    game_state=kid_state, depth=n_depth - 1,
                                    parent_id=n_id, action=act))
                 else:
-                    # MIN : générer uniquement le fils aîné
                     act = actions[0]
                     kid_id = new_id()
-                    kid_state = apply_action(n_state, act)
+                    # UTILISATION DU CHEMIN RAPIDE
+                    kid_state = apply_action_trusted(n_state, act)
                     children_map[n_id].add(kid_id)
                     parent_map[kid_id] = (n_id, act)
                     push(Entry(neg_score=-e, node_id=kid_id, status="vivant",
@@ -537,7 +549,6 @@ def sss_star(state: GameState, depth: int = 3) -> AIResult:
             p_id, p_action = parent_map.get(n_id, (None, None))
 
             if p_id is None:
-                # Racine résolue → terminé
                 best_action = entry.action
                 break
 
@@ -545,26 +556,26 @@ def sss_star(state: GameState, depth: int = 3) -> AIResult:
             all_resolved = all(s in resolved_scores for s in siblings)
 
             if all_resolved and siblings:
-                # Tous les frères résolus → propager au parent
-                # Le type du parent détermine MAX ou MIN
-                # Parent de p_id
                 gp_id, _ = parent_map.get(p_id, (None, None))
-                parent_state_was_max = True  # on ne connaît pas l'état parent facilement
-                # Heuristique simple : score min des frères (nœud MIN)
+                
+                # 3. APPLICATION DU MIN/MAX INTELLIGENT POUR LE PARENT
+                parent_is_max = is_max_map.get(p_id, True)
                 scores = [(resolved_scores[s], resolved_actions[s]) for s in siblings]
-                best_score, best_act = min(scores, key=lambda x: x[0])
+                best_score, best_act = (max if parent_is_max else min)(scores, key=lambda x: x[0])
 
                 resolved_scores[p_id] = best_score
                 resolved_actions[p_id] = best_act
 
-                # Propager encore vers le grand-parent si nécessaire
                 if gp_id is None:
                     best_action = best_act
                     break
+                    
                 gp_siblings = children_map.get(gp_id, set())
                 if all(s in resolved_scores for s in gp_siblings):
+                    # 4. APPLICATION DU MIN/MAX INTELLIGENT POUR LE GRAND-PARENT
+                    gp_is_max = is_max_map.get(gp_id, True)
                     gp_scores = [(resolved_scores[s], resolved_actions[s]) for s in gp_siblings]
-                    gp_best_score, gp_best_act = max(gp_scores, key=lambda x: x[0])
+                    gp_best_score, gp_best_act = (max if gp_is_max else min)(gp_scores, key=lambda x: x[0])
                     best_action = gp_best_act
                     break
 
@@ -579,7 +590,6 @@ def sss_star(state: GameState, depth: int = 3) -> AIResult:
         algorithm="SSS*",
         depth=depth,
     )
-
 # ---------------------------------------------------------------------------
 # Point d'entrée unifié — sélection par difficulté
 # ---------------------------------------------------------------------------
