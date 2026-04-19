@@ -3,3 +3,8 @@ Ce projet est une implémentation complète du jeu de plateau **Quoridor**. Il i
 
 ## Installation
 docker compose down && docker compose up --build
+
+## Utilisation
+- Frontend (jeu) : http://localhost:5173
+- Backend (santé) : http://localhost:8000/health
+- Documentation API : http://localhost:8000/docs
