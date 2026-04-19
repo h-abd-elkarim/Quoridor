@@ -1,11 +1,14 @@
 import { create } from "zustand";
 import { gameApi, GameStateResponse, ValidActionsResponse } from "../api/client";
 
+type GameMode = "PvP" | "PvE";
+
 interface GameStore {
   gameId: string | null;
   gameState: GameStateResponse | null;
   validActions: ValidActionsResponse | null;
   difficulty: string;
+  gameMode: GameMode;
   isAIThinking: boolean;
   lastAIInfo: { algorithm: string; nodes: number; depth: number } | null;
   error: string | null;
@@ -17,6 +20,7 @@ interface GameStore {
   playWall: (row: number, col: number, orientation: "H" | "V") => Promise<void>;
   triggerAI: () => Promise<void>;
   setDifficulty: (d: string) => void;
+  setGameMode: (mode: GameMode) => void;
 }
 
 export const useGameStore = create<GameStore>((set, get) => ({
@@ -24,6 +28,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   gameState: null,
   validActions: null,
   difficulty: "HARD",
+  gameMode: "PvE",
   isAIThinking: false,
   lastAIInfo: null,
   error: null,
@@ -52,8 +57,19 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (!id) return;
     try {
       const res = await gameApi.playMove(id, row, col);
-      set({ gameState: res.data, error: null });
+      const newState = res.data;
+      set({ gameState: newState, error: null });
       await get().fetchValidActions();
+
+      // Mode PvE : si c'est maintenant au tour du joueur 2 et que la partie continue,
+      // l'IA joue automatiquement.
+      if (
+        get().gameMode === "PvE" &&
+        newState.current_player === 2 &&
+        newState.status === "ongoing"
+      ) {
+        await get().triggerAI();
+      }
     } catch (e: any) {
       set({ error: e.response?.data?.detail ?? "Coup invalide." });
     }
@@ -64,8 +80,18 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (!id) return;
     try {
       const res = await gameApi.playWall(id, row, col, orientation);
-      set({ gameState: res.data, error: null });
+      const newState = res.data;
+      set({ gameState: newState, error: null });
       await get().fetchValidActions();
+
+      // Mode PvE : même logique qu'après un déplacement.
+      if (
+        get().gameMode === "PvE" &&
+        newState.current_player === 2 &&
+        newState.status === "ongoing"
+      ) {
+        await get().triggerAI();
+      }
     } catch (e: any) {
       set({ error: e.response?.data?.detail ?? "Barrière invalide." });
     }
@@ -93,4 +119,5 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   setDifficulty: (d) => set({ difficulty: d }),
+  setGameMode: (mode) => set({ gameMode: mode }),
 }));

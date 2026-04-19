@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef, useCallback } from "react";
 import { motion } from "framer-motion";
 import { useGameStore } from "../store/useGameStore";
 import { WallPlaced } from "../api/client";
@@ -7,54 +7,109 @@ import WallGhost from "./WallGhost";
 import PathOverlay from "./PathOverlay";
 
 const BOARD_SIZE = 9;
-const CELL_SIZE = 54;
-const GAP = 4;
+const CELL_SIZE  = 54;
+const GAP        = 4;
+const UNIT       = CELL_SIZE + GAP;
 
 export default function Board() {
   const { gameState, validActions, playMove, playWall, isAIThinking } =
     useGameStore();
-  const [wallMode, setWallMode] = useState<"H" | "V" | null>(null);
+  const [wallMode, setWallMode]   = useState<"H" | "V" | null>(null);
   const [ghostWall, setGhostWall] = useState<WallPlaced | null>(null);
+
+  // ── Ref de la div plateau pour calculer les coordonnées souris ─────────────
+  // On abandonne onMouseEnter/case et on écoute onMouseMove sur le plateau
+  // entier. Cela élimine totalement le bubbling multi-div et le double-fire
+  // de Framer Motion qui causait le scintillement.
+  const boardRef = useRef<HTMLDivElement>(null);
 
   if (!gameState) return null;
 
-  const p1 = gameState.players["1"].position;
-  const p2 = gameState.players["2"].position;
-  const validMoves = validActions?.moves ?? [];
-  const validWalls = validActions?.walls ?? [];
+  const p1          = gameState.players["1"].position;
+  const p2          = gameState.players["2"].position;
+  const validMoves  = validActions?.moves ?? [];
+  const validWalls  = validActions?.walls ?? [];
   const currentPlayer = gameState.current_player;
-  const isOver = gameState.status !== "ongoing";
+  const isOver      = gameState.status !== "ongoing";
 
   const isValidMove = (r: number, c: number) =>
     validMoves.some((m) => m.row === r && m.col === c);
 
   const isValidWall = (r: number, c: number, o: "H" | "V") =>
-    validWalls.some(
-      (w) => w.row === r && w.col === c && w.orientation === o
-    );
+    validWalls.some((w) => w.row === r && w.col === c && w.orientation === o);
 
-  const handleCellClick = (row: number, col: number) => {
-    if (isOver || isAIThinking) return;
-    if (wallMode) {
-      if (row < BOARD_SIZE - 1 && col < BOARD_SIZE - 1) {
-        playWall(row, col, wallMode);
-        setWallMode(null);
+  // ── Conversion coordonnée pixel → case (row, col) ─────────────────────────
+  // Le décalage GAP/2 vient du padding interne du plateau.
+  const pixelToCell = (offsetX: number, offsetY: number) => {
+    const col = Math.floor((offsetX - GAP / 2) / UNIT);
+    const row = Math.floor((offsetY - GAP / 2) / UNIT);
+    return { row, col };
+  };
+
+  // ── Gestion du survol via onMouseMove sur le plateau entier ───────────────
+  // UNE SEULE source d'événement → zéro conflit, zéro double-fire.
+  const handleBoardMouseMove = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      if (!wallMode || isOver || isAIThinking) return;
+
+      const rect   = e.currentTarget.getBoundingClientRect();
+      const ox     = e.clientX - rect.left;
+      const oy     = e.clientY - rect.top;
+      const { row, col } = pixelToCell(ox, oy);
+
+      // Les murs ne peuvent être posés qu'en dehors de la dernière rangée/colonne
+      if (row < 0 || row >= BOARD_SIZE - 1 || col < 0 || col >= BOARD_SIZE - 1) {
         setGhostWall(null);
+        return;
       }
-      return;
-    }
-    if (isValidMove(row, col)) playMove(row, col);
-  };
 
-  const handleCellHover = (row: number, col: number) => {
-    if (!wallMode || row >= BOARD_SIZE - 1 || col >= BOARD_SIZE - 1) {
-      setGhostWall(null);
-      return;
-    }
-    setGhostWall({ row, col, orientation: wallMode });
-  };
+      // Éviter les re-renders inutiles si la case n'a pas changé
+      setGhostWall((prev) => {
+        if (
+          prev &&
+          prev.row         === row &&
+          prev.col         === col &&
+          prev.orientation === wallMode
+        ) {
+          return prev; // Même référence → pas de re-render
+        }
+        return { row, col, orientation: wallMode };
+      });
+    },
+    [wallMode, isOver, isAIThinking]
+  );
 
-  const boardPx = BOARD_SIZE * (CELL_SIZE + GAP) + GAP;
+  const handleBoardMouseLeave = useCallback(() => {
+    setGhostWall(null);
+  }, []);
+
+  // ── Clic sur le plateau ────────────────────────────────────────────────────
+  const handleBoardClick = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      if (isOver || isAIThinking) return;
+
+      const rect   = e.currentTarget.getBoundingClientRect();
+      const ox     = e.clientX - rect.left;
+      const oy     = e.clientY - rect.top;
+      const { row, col } = pixelToCell(ox, oy);
+
+      if (row < 0 || row >= BOARD_SIZE || col < 0 || col >= BOARD_SIZE) return;
+
+      if (wallMode) {
+        if (row < BOARD_SIZE - 1 && col < BOARD_SIZE - 1) {
+          playWall(row, col, wallMode);
+          setWallMode(null);
+          setGhostWall(null);
+        }
+        return;
+      }
+
+      if (isValidMove(row, col)) playMove(row, col);
+    },
+    [wallMode, isOver, isAIThinking, validMoves, playMove, playWall]
+  );
+
+  const boardPx = BOARD_SIZE * UNIT + GAP;
 
   return (
     <div className="flex flex-col items-center gap-5">
@@ -76,10 +131,7 @@ export default function Board() {
         ))}
         {wallMode && (
           <button
-            onClick={() => {
-              setWallMode(null);
-              setGhostWall(null);
-            }}
+            onClick={() => { setWallMode(null); setGhostWall(null); }}
             className="px-4 py-2 text-[10px] font-mono uppercase tracking-[0.2em] rounded-lg glass text-zinc-500 hover:text-zinc-300"
           >
             ✕ Annuler
@@ -112,16 +164,22 @@ export default function Board() {
           }}
         />
 
-        {/* Plateau */}
+        {/* ── Plateau ── */}
+        {/* onMouseMove / onClick gèrent TOUT — les motion.div cases n'ont plus
+            d'handlers hover pour éviter le double-fire Framer Motion. */}
         <div
+          ref={boardRef}
           className="relative select-none rounded-lg overflow-hidden"
           style={{
-            width: boardPx,
+            width:  boardPx,
             height: boardPx,
             background:
               "linear-gradient(145deg, rgba(15,15,28,0.9), rgba(8,8,16,0.95))",
+            cursor: wallMode ? "crosshair" : "default",
           }}
-          onMouseLeave={() => setGhostWall(null)}
+          onMouseMove={handleBoardMouseMove}
+          onMouseLeave={handleBoardMouseLeave}
+          onClick={handleBoardClick}
         >
           {/* Grille holographique SVG (fond) */}
           <svg
@@ -133,12 +191,12 @@ export default function Board() {
             <defs>
               <pattern
                 id="holo-grid"
-                width={CELL_SIZE + GAP}
-                height={CELL_SIZE + GAP}
+                width={UNIT}
+                height={UNIT}
                 patternUnits="userSpaceOnUse"
               >
                 <path
-                  d={`M ${CELL_SIZE + GAP} 0 L 0 0 0 ${CELL_SIZE + GAP}`}
+                  d={`M ${UNIT} 0 L 0 0 0 ${UNIT}`}
                   fill="none"
                   stroke="#c084fc"
                   strokeWidth="0.5"
@@ -151,51 +209,40 @@ export default function Board() {
           {/* Cases */}
           {Array.from({ length: BOARD_SIZE }, (_, row) =>
             Array.from({ length: BOARD_SIZE }, (_, col) => {
-              const hasP1 = p1.row === row && p1.col === col;
-              const hasP2 = p2.row === row && p2.col === col;
-              const validMove = isValidMove(row, col);
+              const hasP1      = p1.row === row && p1.col === col;
+              const hasP2      = p2.row === row && p2.col === col;
+              const validMove  = isValidMove(row, col);
               const isWallTarget =
                 wallMode !== null &&
                 row < BOARD_SIZE - 1 &&
                 col < BOARD_SIZE - 1 &&
                 isValidWall(row, col, wallMode);
-              const isWallBlocked =
-                wallMode !== null &&
-                row < BOARD_SIZE - 1 &&
-                col < BOARD_SIZE - 1 &&
-                !isValidWall(row, col, wallMode);
 
               return (
                 <motion.div
                   key={`cell-${row}-${col}`}
-                  className={`absolute flex items-center justify-center cursor-pointer rounded-md transition-colors duration-150 ${
+                  // ── PAS de onClick / onMouseEnter ici ──────────────────────
+                  // Tout est géré au niveau du plateau parent (handleBoardClick
+                  // / handleBoardMouseMove). Cela élimine le bubbling et le
+                  // double-fire des wrappers Framer Motion qui causait le
+                  // scintillement du ghost.
+                  className={`absolute flex items-center justify-center rounded-md pointer-events-none ${
                     validMove
                       ? "bg-emerald-400/[0.04] ring-1 ring-emerald-400/20"
                       : isWallTarget
                       ? "bg-amber-400/[0.04] ring-1 ring-amber-400/20"
-                      : "bg-white/[0.015] ring-1 ring-white/[0.04] hover:ring-white/10"
-                  } ${isWallBlocked ? "hover:ring-red-500/30" : ""}`}
+                      : "bg-white/[0.015] ring-1 ring-white/[0.04]"
+                  }`}
                   style={{
-                    left: col * (CELL_SIZE + GAP) + GAP / 2,
-                    top: row * (CELL_SIZE + GAP) + GAP / 2,
-                    width: CELL_SIZE,
+                    left:   col * UNIT + GAP / 2,
+                    top:    row * UNIT + GAP / 2,
+                    width:  CELL_SIZE,
                     height: CELL_SIZE,
                   }}
-                  onClick={() => handleCellClick(row, col)}
-                  onMouseEnter={() => handleCellHover(row, col)}
-                  whileHover={
-                    validMove
-                      ? {
-                          backgroundColor: "rgba(52, 211, 153, 0.1)",
-                          scale: 1.02,
-                        }
-                      : {}
-                  }
                 >
                   {/* Coordonnées discrètes */}
                   <span className="absolute top-0.5 left-1 text-[8px] text-zinc-700 font-mono select-none tabular">
-                    {String.fromCharCode(97 + col)}
-                    {row + 1}
+                    {String.fromCharCode(97 + col)}{row + 1}
                   </span>
 
                   {hasP1 && (
@@ -230,7 +277,7 @@ export default function Board() {
             />
           ))}
 
-          {/* Ghost wall */}
+          {/* Ghost wall — pointer-events:none, pas de conflit possible */}
           <WallGhost
             ghost={ghostWall}
             cellSize={CELL_SIZE}
@@ -240,6 +287,14 @@ export default function Board() {
               isValidWall(ghostWall.row, ghostWall.col, ghostWall.orientation)
             }
           />
+
+          {/* Overlay cliquable en mode mur — capte les événements AVANT les cases */}
+          {wallMode && (
+            <div
+              className="absolute inset-0 rounded-lg"
+              style={{ cursor: "crosshair", zIndex: 10 }}
+            />
+          )}
 
           {/* Voile de réflexion IA */}
           {isAIThinking && (
@@ -261,11 +316,7 @@ export default function Board() {
           style={{ paddingLeft: GAP / 2, paddingRight: GAP / 2 }}
         >
           {Array.from({ length: BOARD_SIZE }, (_, i) => (
-            <div
-              key={i}
-              style={{ width: CELL_SIZE + GAP }}
-              className="text-center"
-            >
+            <div key={i} style={{ width: UNIT }} className="text-center">
               {String.fromCharCode(97 + i)}
             </div>
           ))}
@@ -275,26 +326,20 @@ export default function Board() {
   );
 }
 
-/* --------- Pion premium avec respiration --------- */
-function Pawn({
-  color,
-  isActive,
-}: {
-  color: "blue" | "red";
-  isActive: boolean;
-}) {
+/* ── Pion premium avec respiration ── */
+function Pawn({ color, isActive }: { color: "blue" | "red"; isActive: boolean }) {
   const palette =
     color === "blue"
       ? {
-          core: "from-blue-300 via-blue-500 to-blue-800",
-          ring: "ring-blue-300/70",
-          glow: "rgba(96,165,250,0.55)",
+          core:   "from-blue-300 via-blue-500 to-blue-800",
+          ring:   "ring-blue-300/70",
+          glow:   "rgba(96,165,250,0.55)",
           center: "bg-blue-200/80",
         }
       : {
-          core: "from-red-300 via-red-500 to-red-800",
-          ring: "ring-red-300/70",
-          glow: "rgba(248,113,113,0.55)",
+          core:   "from-red-300 via-red-500 to-red-800",
+          ring:   "ring-red-300/70",
+          glow:   "rgba(248,113,113,0.55)",
           center: "bg-red-200/80",
         };
 
@@ -304,24 +349,14 @@ function Pawn({
       className="relative"
       transition={{ type: "spring", stiffness: 380, damping: 30 }}
     >
-      {/* Halo de respiration */}
       {isActive && (
         <motion.div
           className="absolute inset-0 rounded-full"
           style={{ background: palette.glow, filter: "blur(8px)" }}
-          animate={{
-            scale: [1, 1.4, 1],
-            opacity: [0.4, 0.75, 0.4],
-          }}
-          transition={{
-            duration: 1.8,
-            repeat: Infinity,
-            ease: "easeInOut",
-          }}
+          animate={{ scale: [1, 1.4, 1], opacity: [0.4, 0.75, 0.4] }}
+          transition={{ duration: 1.8, repeat: Infinity, ease: "easeInOut" }}
         />
       )}
-
-      {/* Corps du pion */}
       <motion.div
         className={`relative w-9 h-9 rounded-full flex items-center justify-center shadow-lg ring-2 ${palette.ring} bg-gradient-to-br ${palette.core}`}
         animate={
@@ -336,15 +371,9 @@ function Pawn({
               }
             : {}
         }
-        transition={{
-          duration: 1.8,
-          repeat: isActive ? Infinity : 0,
-          ease: "easeInOut",
-        }}
+        transition={{ duration: 1.8, repeat: isActive ? Infinity : 0, ease: "easeInOut" }}
       >
-        <div
-          className={`w-3 h-3 rounded-full ${palette.center} shadow-inner`}
-        />
+        <div className={`w-3 h-3 rounded-full ${palette.center} shadow-inner`} />
       </motion.div>
     </motion.div>
   );

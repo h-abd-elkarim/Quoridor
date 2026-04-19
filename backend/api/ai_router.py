@@ -27,7 +27,7 @@ def ai_play(
 ) -> AIPlayResponse:
     """
     L'IA joue le meilleur coup pour le joueur courant.
-    
+
     Retourne l'état après le coup + métadonnées pédagogiques :
     quel algorithme, combien de nœuds explorés, quelle profondeur.
     """
@@ -56,7 +56,6 @@ def ai_play(
     new_state = apply_action(state, result.best_action)
     _games[game_id] = new_state
 
-    # Sérialisation de l'action jouée pour l'affichage frontend
     action_played = _action_to_dict(result.best_action)
 
     return AIPlayResponse(
