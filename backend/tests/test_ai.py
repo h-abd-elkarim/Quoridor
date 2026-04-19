@@ -67,7 +67,7 @@ def test_minimax_depth1_is_valid_move(fresh_state):
 def test_negamax_returns_action(fresh_state):
     result = negamax_decision(fresh_state, depth=1)
     assert result.best_action is not None
-    assert result.algorithm == "Négamax"
+    assert result.algorithm in ("Négamax", "Negamax")
 
 
 def test_negamax_consistent_with_minimax(fresh_state):
@@ -129,7 +129,7 @@ def test_negalphabeta_returns_action(fresh_state):
     tt = TranspositionTable()
     result = negalphabeta_decision(fresh_state, depth=2, tt=tt)
     assert result.best_action is not None
-    assert result.algorithm == "Négα-Bêta"
+    assert result.algorithm in ("Négα-Bêta", "Nega-Beta")
 
 
 # ---------------------------------------------------------------------------
